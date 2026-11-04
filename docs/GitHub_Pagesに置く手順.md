@@ -1,4 +1,7 @@
-# 旅ルートくんを GitHub Pages に置く手順（とと の手で 1 回だけ）
+# 旅ルートくんを GitHub Pages に置く手順
+
+**2026-11-04 に置いた**：https://github.com/shintaro60320-blip/tabi-route-kun → **https://shintaro60320-blip.github.io/tabi-route-kun/**（公開・秘密なし）。
+以下は「もう一度置く」「更新する」時の手順。
 
 アプリは `app/` の中身をそのまま置けば動きます（ビルド不要・秘密情報なし）。
 
