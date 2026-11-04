@@ -1,8 +1,8 @@
 // 画面3 ルート（設計書 §3.3）
 import { el, icon, yen } from '../ui.js';
-import { COURSES } from '../prompt.js';
+import { COURSES, MODES } from '../prompt.js';
 import { formatDuration } from '../schedule.js';
-import { routeLinks } from '../maplinks.js';
+import { routeLinks, mealUrl } from '../maplinks.js';
 import { removeSpot } from '../trip.js';
 import { startJob } from './course.js';
 
@@ -21,7 +21,7 @@ export function render(root, { state, nav, store, route }) {
     first ? el('img', { src: photoOf(first).thumb, alt: trip.destination }) : el('div', { class: 'ph', text: trip.destination.slice(0, 2) }),
     el('div', { class: 'hero__shade' }),
     el('button', { class: 'back back--pill', type: 'button', on: { click: () => nav('/course') } }, [icon('back', 18), 'もどる']),
-    course ? el('span', { class: 'tag tag--glass hero__tag', text: `${course.name}コース` }) : null,
+    course ? el('span', { class: 'tag tag--glass hero__tag', text: `${course.name}コース${MODES[trip.mode] ? '・' + MODES[trip.mode].name : ''}` }) : null,
     el('div', { class: 'hero__text' }, [
       el('h1', { class: 'hero__title', text: `${trip.destination}のまわり` }),
       el('div', { class: 'hero__sub', text: summary(trip, live) }),
@@ -48,6 +48,9 @@ export function render(root, { state, nav, store, route }) {
     ]);
     attachSwipe(row, () => askRemove(trip, s, { store, nav }));
     tl.append(row);
+    // ごはん枠（設計書 §16.4）：店は名指しせず、近くを Google マップで探す
+    if (trip.lunch && trip.lunch.afterN === s.n) tl.append(mealRow('lunch', trip.lunch.start, s, trip));
+    if (trip.dinner && trip.dinner.afterN === s.n) tl.append(mealRow('dinner', null, s, trip));
     // 次の場所までの移動＝schedule が組んだ gap（間に外した場所があれば目安・路線名なし）
     const g = s.gap;
     if (i < live.length - 1 && g && g.minutes) {
@@ -61,7 +64,7 @@ export function render(root, { state, nav, store, route }) {
   const redo = el('button', { class: 'btn btn--text', type: 'button', style: 'align-self:flex-end;margin:0 24px', on: {
     click() {
       if (!confirm('同じ行き先・コースでもう一度作ります（今日の回数を 1 回使います）。よろしいですか？')) return;
-      state.current = { destination: trip.destination, course: trip.course, startTime: trip.startTime };
+      state.current = { destination: trip.destination, course: trip.course, startTime: trip.startTime, mode: MODES[trip.mode] ? trip.mode : 'classic' };
       startJob({ state, nav, store });
     },
   } }, ['作り直す']);
@@ -75,7 +78,10 @@ export function render(root, { state, nav, store, route }) {
 
   root.append(el('section', { class: 'screen screen--bare', dataset: { screen: 'trip' } }, [
     hero,
-    el('div', { style: 'max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1' }, [tl, searchSuggestions(trip), redo]),
+    el('div', { style: 'max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1' }, [
+      trip.note ? el('div', { class: 'note', style: 'padding:16px 24px 0', text: trip.note }) : null,
+      tl, searchSuggestions(trip), redo,
+    ]),
     el('div', { class: 'bottombar' }, [mapBtn, gBtn]),
   ]));
 }
@@ -92,6 +98,19 @@ function searchSuggestions(trip) {
   });
   frame.srcdoc = `<!doctype html><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:4px 0;font-family:'Noto Sans JP',sans-serif}</style>${trip.searchHtml}`;
   return el('div', { style: 'padding: 8px 24px 0' }, [el('div', { class: 'kicker', text: 'Google 検索の候補' }), frame]);
+}
+
+/** ごはん枠の行。時刻（昼だけ）・フォークの印・探すボタン。 */
+function mealRow(type, time, spot, trip) {
+  const label = type === 'lunch' ? 'このあたりで昼ごはん' : 'このあたりで晩ごはん';
+  return el('a', { class: 'meal', href: mealUrl(type, spot.name, trip.area), target: '_blank', rel: 'noopener' }, [
+    el('div', { class: 'stop__time', text: time || '' }),
+    el('div', { class: 'meal__mark' }, [icon('fork', 16)]),
+    el('div', { class: 'meal__body' }, [
+      el('div', { class: 'meal__name', text: label }),
+      el('div', { class: 'meal__sub' }, [icon('pin', 16), `${spot.name}の近くを Googleマップで探す`]),
+    ]),
+  ]);
 }
 
 /** 写真の出どころ：photo（wiki／commons）。古い保存分は wiki.thumb から。 */

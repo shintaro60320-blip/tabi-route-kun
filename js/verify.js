@@ -172,7 +172,8 @@ export async function verifySpot(spot, area, { fetchImpl = fetch, nominatim, sig
   const name = spot && spot.name ? String(spot.name) : '';
   const out = { verified: 'none', wiki: null, lat: null, lng: null, photo: null };
   if (!name) return out;
-  const page = await wikiLookup(name, { fetchImpl, signal });
+  // 候補から来た場所は記事名が分かっとる（§16）ので、それで直接引く（検索で別の記事に当たるのを防ぐ）
+  const page = await wikiLookup((spot.wikiTitle && String(spot.wikiTitle)) || name, { fetchImpl, signal });
   if (page) {
     out.verified = 'wiki';
     out.wiki = { title: page.title, url: page.url, thumb: page.thumb, extract: page.extract };

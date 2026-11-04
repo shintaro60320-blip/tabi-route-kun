@@ -19,18 +19,26 @@ export function addMinutes(hhmm, min) {
   return fromMin(toMin(hhmm) + min);
 }
 
+export const LUNCH_MINUTES = 60;
+const LUNCH_FROM = 11 * 60 + 30; // 終わりがこの時刻以降の最初の場所の後に昼ごはん
+const LUNCH_UNTIL = 14 * 60; // これを過ぎとったら枠は置かん
+const DINNER_FROM = 16 * 60 + 30;
+
 /**
  * removed:true は飛ばす。数でない分は 0。元の配列は変えない。
  * 各 live な場所に gap（次の live な場所までの移動）を付ける：
  * 間に外した場所があれば、その分の移動も足して estimated:true（路線名は信用できんので落とす）。最後は null。
+ * ごはん枠（設計書 §16.4）：opts.lunch なら、終わりが 11:30〜14:00 に入る最初の場所の後に 60 分を置き、以後の時刻をずらす。
+ * dinner は opts.dinner か最後の終わりが 16:30 以降なら最後の場所の後（時間は足さん）。
  */
-export function computeSchedule(spots, startTime) {
+export function computeSchedule(spots, startTime, opts = {}) {
   const list = (spots || []).map((s) => ({ ...s }));
   let clock = toMin(startTime);
   let totalCostYen = 0;
   let lastEnd = clock;
   let prevLive = null;
   let pendingGap = null; // prevLive から次の live までの移動を積む
+  let lunch = null;
   for (const s of list) {
     const m = s.moveToNext;
     if (s.removed) {
@@ -53,11 +61,17 @@ export function computeSchedule(spots, startTime) {
     lastEnd = end;
     clock = end;
     totalCostYen += num(s.costYen);
+    if (opts.lunch && !lunch && end >= LUNCH_FROM && end < LUNCH_UNTIL) {
+      lunch = { afterN: s.n, start: fromMin(end), end: fromMin(end + LUNCH_MINUTES) };
+      clock += LUNCH_MINUTES;
+      lastEnd = clock;
+    }
     prevLive = s;
     pendingGap = m ? { minutes: num(m.minutes), mode: m.mode ?? null, note: m.note ?? null, estimated: false } : { minutes: 0, mode: null, note: null, estimated: false };
   }
   if (prevLive) prevLive.gap = null;
-  return { spots: list, totalMinutes: Math.max(0, lastEnd - toMin(startTime)), totalCostYen };
+  const dinner = prevLive && (opts.dinner || lastEnd >= DINNER_FROM) ? { afterN: prevLive.n } : null;
+  return { spots: list, totalMinutes: Math.max(0, lastEnd - toMin(startTime)), totalCostYen, lunch, dinner };
 }
 
 export function roundHalfHour(min) {

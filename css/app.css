@@ -147,6 +147,17 @@ img { display: block; }
 .stop__meta b { color: var(--ink); }
 .stop__thumb { width: 64px; height: 64px; border-radius: var(--radius-s); object-fit: cover; background: var(--face); }
 .move { grid-column: 3; display: flex; align-items: center; gap: 6px; font-size: .9rem; color: var(--sub); padding-bottom: 14px; }
+/* ごはん枠（§16.4）：場所の行と違う形＝朱の細い枠・番号なし */
+.meal { display: contents; color: inherit; }
+.meal__mark { grid-column: 2; position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; background: var(--white); border: 2px solid var(--seal); color: var(--seal); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px var(--white); }
+.meal__mark svg { width: 15px; height: 15px; stroke: var(--seal); }
+.meal__body { grid-column: 3; margin-bottom: 18px; padding: 12px 14px; border: 1.5px solid var(--seal); border-radius: var(--radius-s); background: var(--white); display: flex; flex-direction: column; gap: 4px; }
+.meal__name { font-size: 1.1rem; font-weight: 700; color: var(--seal); }
+.meal__sub { display: flex; align-items: center; gap: 6px; font-size: .9rem; color: var(--sub); }
+.meal__sub svg { width: 16px; height: 16px; flex: none; }
+/* 選び方（§16.5） */
+.modes { display: flex; flex-direction: column; gap: 8px; }
+.modes__desc { padding-left: 2px; }
 .move svg { width: 16px; height: 16px; }
 .bottombar { flex: none; padding: 14px 24px max(28px, env(safe-area-inset-bottom)); background: var(--white); box-shadow: 0 -8px 24px rgba(21, 32, 43, .06); display: flex; gap: 12px; position: sticky; bottom: 0; }
 .bottombar .btn--primary { min-height: 66px; font-size: 1.15rem; border-radius: 18px; letter-spacing: 0; white-space: nowrap; }

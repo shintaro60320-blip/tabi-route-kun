@@ -1,10 +1,10 @@
 // 画面2 コース選び（設計書 §3.2）→ 生成の流れを起こして読み込み画面へ
 import { el, icon } from '../ui.js';
-import { COURSES, START_TIMES } from '../prompt.js';
+import { COURSES, MODES, START_TIMES } from '../prompt.js';
 import { generateTrip, errorMessage } from '../flow.js';
 
 const ICON = { walk: 'walk', half: 'train', full: 'sun' };
-const TIMEOUT_MS = 40000;
+const TIMEOUT_MS = 60000; // 候補集め（Wikipedia 数回）＋ Gemini ＋ 確認
 
 export function render(root, { state, nav, store }) {
   if (!state.current.destination) { nav('/home'); return; }
@@ -26,6 +26,19 @@ export function render(root, { state, nav, store }) {
     return btn;
   });
 
+  // 選び方（設計書 §16.5）：定番／2回目
+  if (!MODES[cur.mode]) cur.mode = 'classic';
+  const modeDesc = el('div', { class: 'note modes__desc', text: MODES[cur.mode].desc });
+  const modeBtns = Object.values(MODES).map((m) => el('button', { type: 'button', ariaPressed: cur.mode === m.id, text: m.name, on: { click() {
+    cur.mode = m.id;
+    modeBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.textContent === m.name)));
+    modeDesc.textContent = m.desc;
+  } } }));
+  const modes = el('div', { class: 'modes', role: 'group', ariaLabel: '選び方' }, [
+    el('div', { class: 'seg' }, modeBtns),
+    modeDesc,
+  ]);
+
   const times = el('div', { class: 'times', role: 'group', ariaLabel: '出発時刻' }, [el('span', { class: 'times__label', text: '出発' })]);
   const timeBtns = START_TIMES.map((t) => el('button', { type: 'button', ariaPressed: cur.startTime === t, text: t, on: { click() { cur.startTime = t; timeBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.textContent === t))); } } }));
   times.append(...timeBtns);
@@ -39,6 +52,7 @@ export function render(root, { state, nav, store }) {
       el('h1', { class: 'h1 h1--s' }, ['どのくらい', el('br'), '回りますか？']),
       el('div', { class: 'rule', ariaHidden: true }),
     ]),
+    modes,
     el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, cards),
     times,
     el('div', { class: 'spacer' }),
@@ -72,9 +86,10 @@ function pathSvg(count) {
 /** 生成を起こし、読み込み画面に渡す。 */
 export function startJob({ state, nav, store }) {
   const { destination, course, startTime } = state.current;
+  const mode = MODES[state.current.mode] ? state.current.mode : 'classic';
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
-  const promise = generateTrip({ destination, course, startTime, settings: store.getSettings(), store, signal: ac.signal })
+  const promise = generateTrip({ destination, course, startTime, mode, settings: store.getSettings(), store, signal: ac.signal })
     .finally(() => clearTimeout(timer));
   promise.catch(() => {}); // 読み込み画面が受ける
   state.pending = ac;

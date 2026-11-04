@@ -22,6 +22,12 @@ export function fullRouteUrl(names, area, travelmode) {
   return `${DIR}&origin=${origin}&destination=${destination}${wp}&travelmode=${travelmode}`;
 }
 
+/** ごはん枠（設計書 §16.4）：店は名指しせず、直前の場所の近くを Google マップで探す。type: 'lunch' | 'dinner' */
+export function mealUrl(type, spotName, area) {
+  const word = type === 'dinner' ? 'ディナー' : 'ランチ';
+  return `${SEARCH}&query=${placeQuery(`${word} ${spotName}`, area)}`;
+}
+
 export function legUrl(from, to, area) {
   return `${DIR}&origin=${placeQuery(from, area)}&destination=${placeQuery(to, area)}&travelmode=transit`;
 }

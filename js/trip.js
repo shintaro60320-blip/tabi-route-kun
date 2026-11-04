@@ -18,8 +18,13 @@ function officialFromRefs(name, refs) {
   return hit ? hit.uri : null;
 }
 
+/** ごはん枠の決め方（設計書 §16.4）：昼は全コースで時刻が合えば、晩は 1日コースか遅い終わり。 */
+export function scheduleOpts(course) {
+  return { lunch: true, dinner: course === 'full' };
+}
+
 /** Gemini の形（snake_case）＋確認結果 → Trip（camelCase・時刻入り）。 */
-export function buildTrip({ destination, course, startTime, model, normalized, refs = [], verifyResults = [], searchHtml = null, now = new Date() }) {
+export function buildTrip({ destination, course, startTime, model, normalized, refs = [], verifyResults = [], searchHtml = null, now = new Date(), mode = 'classic', wanted = null, note = null }) {
   const n = normalized || { spots: [] };
   const spots = (n.spots || []).map((s, i) => {
     const v = verifyResults[i] || {};
@@ -27,6 +32,7 @@ export function buildTrip({ destination, course, startTime, model, normalized, r
     return {
       n: i + 1,
       name: s.name,
+      wikiTitle: s.wikiTitle ?? null,
       kind: s.kind ?? null,
       summary: s.summary ?? null,
       stayMinutes: s.stay_minutes ?? null,
@@ -43,16 +49,21 @@ export function buildTrip({ destination, course, startTime, model, normalized, r
       removed: false,
     };
   });
-  const sched = computeSchedule(spots, startTime);
+  const sched = computeSchedule(spots, startTime, scheduleOpts(course));
   return {
     id: newTripId(now),
     createdAt: now.toISOString(),
     destination: n.destination || destination,
     area: n.area || '',
     course,
+    mode,
     startTime,
     model,
     spots: sched.spots,
+    lunch: sched.lunch,
+    dinner: sched.dinner,
+    wanted: wanted ?? spots.length,
+    note: note || null,
     refs: (refs || []).map((r) => ({ title: r.title || '', uri: r.uri })),
     searchHtml: typeof searchHtml === 'string' && searchHtml ? searchHtml : null,
     totalMinutes: sched.totalMinutes,
@@ -63,6 +74,6 @@ export function buildTrip({ destination, course, startTime, model, normalized, r
 /** n 番目を外して時刻と合計を計算し直す。元は変えない。 */
 export function removeSpot(trip, n) {
   const spots = trip.spots.map((s) => (s.n === n ? { ...s, removed: true } : { ...s }));
-  const sched = computeSchedule(spots, trip.startTime);
-  return { ...trip, spots: sched.spots, totalMinutes: sched.totalMinutes, totalCostYen: sched.totalCostYen };
+  const sched = computeSchedule(spots, trip.startTime, scheduleOpts(trip.course));
+  return { ...trip, spots: sched.spots, lunch: sched.lunch, dinner: sched.dinner, totalMinutes: sched.totalMinutes, totalCostYen: sched.totalCostYen };
 }
