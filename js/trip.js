@@ -1,4 +1,4 @@
-// 旅（Trip）の組み立てと編集（設計書 §8.2）。
+// 旅（Trip）の組み立てと編集（設計書 §8.2・§17）。場所は候補の情報＋Gemini の一言から組む。
 
 import { computeSchedule } from './schedule.js';
 
@@ -13,57 +13,66 @@ export function newTripId(date = new Date(), rand = Math.random) {
   return `t_${stamp}_${suffix}`;
 }
 
-function officialFromRefs(name, refs) {
-  const hit = (refs || []).find((r) => r && typeof r.title === 'string' && r.title.includes(name) && /^https:\/\//i.test(r.uri || ''));
-  return hit ? hit.uri : null;
-}
-
 /** ごはん枠の決め方（設計書 §16.4）：昼は全コースで時刻が合えば、晩は 1日コースか遅い終わり。 */
 export function scheduleOpts(course) {
   return { lunch: true, dinner: course === 'full' };
 }
 
-/** Gemini の形（snake_case）＋確認結果 → Trip（camelCase・時刻入り）。 */
-export function buildTrip({ destination, course, startTime, model, normalized, refs = [], verifyResults = [], searchHtml = null, now = new Date(), mode = 'classic', wanted = null, note = null }) {
-  const n = normalized || { spots: [] };
-  const spots = (n.spots || []).map((s, i) => {
-    const v = verifyResults[i] || {};
-    const m = s.move_to_next;
-    return {
-      n: i + 1,
-      name: s.name,
-      wikiTitle: s.wikiTitle ?? null,
-      kind: s.kind ?? null,
-      summary: s.summary ?? null,
-      stayMinutes: s.stay_minutes ?? null,
-      costYen: s.cost_yen ?? null,
-      costNote: s.cost_note ?? null,
-      hours: s.hours ?? null,
-      officialUrl: s.official_url || officialFromRefs(s.name, refs),
-      moveToNext: m ? { mode: m.mode ?? null, minutes: m.minutes ?? null, note: m.note ?? null } : null,
-      verified: v.verified || 'none',
-      wiki: v.wiki || null,
-      photo: v.photo || (v.wiki && v.wiki.thumb ? { thumb: v.wiki.thumb, source: 'wiki', url: v.wiki.url || null } : null),
-      lat: v.lat ?? null,
-      lng: v.lng ?? null,
-      removed: false,
-    };
-  });
-  const sched = computeSchedule(spots, startTime, scheduleOpts(course));
+function num(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Gemini の選択（normalizePicks の 1 件）→ 場所（camelCase）。記事名・URL・写真・座標・説明文は候補から（§17.7：確認通信はせん）。
+ * 営業時間・公式 URL は持たん（作らせんため・§17.4）。
+ */
+export function spotFromPick(pick) {
+  const c = pick.candidate || {};
+  const lat = num(c.lat);
+  const lng = num(c.lng);
+  const wiki = c.wikiTitle ? { title: c.wikiTitle, url: c.url || null, thumb: c.thumb || null, extract: c.extract || null } : null;
+  return {
+    name: c.name,
+    wikiTitle: c.wikiTitle || null,
+    kind: pick.kind || null,
+    summary: pick.reason || null,
+    stayMinutes: num(pick.stay_minutes),
+    costYen: num(pick.cost_yen),
+    costNote: pick.cost_note || null,
+    hours: null,
+    officialUrl: null,
+    moveToNext: null,
+    verified: wiki ? 'wiki' : lat !== null && lng !== null ? 'osm' : 'none',
+    wiki,
+    photo: c.thumb ? { thumb: c.thumb, source: 'wiki', url: c.url || null } : null,
+    lat,
+    lng,
+    hero: Boolean(c.hero),
+    priority: Number.isFinite(Number(pick.priority)) ? Number(pick.priority) : 0,
+    removed: false,
+  };
+}
+
+/** 並び済みの場所（moveToNext 付き）→ Trip（番号・時刻入り）。 */
+export function buildTrip({ destination, area = '', course, startTime, model, now = new Date(), mode = 'classic', travelDate = null, spots = [], wanted = null, note = null, dropped = [], refs = [], searchHtml = null }) {
+  const list = (spots || []).map((s, i) => ({ ...s, n: i + 1, removed: Boolean(s.removed) }));
+  const sched = computeSchedule(list, startTime, scheduleOpts(course));
   return {
     id: newTripId(now),
     createdAt: now.toISOString(),
-    destination: n.destination || destination,
-    area: n.area || '',
+    destination,
+    area: area || '',
     course,
     mode,
+    travelDate: travelDate || null,
     startTime,
     model,
     spots: sched.spots,
     lunch: sched.lunch,
     dinner: sched.dinner,
-    wanted: wanted ?? spots.length,
+    wanted: wanted ?? list.length,
     note: note || null,
+    dropped: Array.isArray(dropped) ? dropped.slice() : [],
     refs: (refs || []).map((r) => ({ title: r.title || '', uri: r.uri })),
     searchHtml: typeof searchHtml === 'string' && searchHtml ? searchHtml : null,
     totalMinutes: sched.totalMinutes,

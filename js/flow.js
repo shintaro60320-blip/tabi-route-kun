@@ -1,30 +1,51 @@
-// 生成の流れ（設計書 §2.4 §5 §9）：問う → 取り出す → 確かめる → 組む → 保存。
+// 生成の流れ（設計書 §17）：候補を集める → 季節と除外 → Gemini が選ぶ → 順番と時間はアプリ → 組む → 保存。
 
-import { SYSTEM_INSTRUCTION, buildUserPrompt, COURSES } from './prompt.js';
-import { MODEL_PREFERENCE, generate, extractJson, normalizeTripJson, GeminiError } from './gemini.js';
-import { verifyAll, createNominatim, defaultNominatim, normalizeTitle } from './verify.js';
-import { collectCandidates, matchSpotToCandidates } from './candidates.js';
-import { buildTrip } from './trip.js';
+import { SYSTEM_INSTRUCTION, buildPickPrompt, pickSchema, COURSES } from './prompt.js';
+import { MODEL_PREFERENCE, generate, extractJson, normalizePicks, GeminiError, DEFAULT_STAY } from './gemini.js';
+import { createNominatim, defaultNominatim, normalizeTitle } from './verify.js';
+import { collectCandidates, scoreCandidates, distanceKm, matchSpotToCandidates, CandidateError, COURSE_RADIUS_KM, firstSentence } from './candidates.js';
+import { applySeason, todayJst } from './season.js';
+import { fitToBudget } from './route.js';
+import { buildTrip, spotFromPick } from './trip.js';
 
-// 同じ行き先・コースの候補はセッション内で使い回す（作り直しで Wikipedia を叩き直さん）。テスト（fetchImpl 差し替え）では使わん。
+export const COORD_FILL_MAX = 4; // 座標を補う地元候補の数（§17.2-5）
+
+// 同じ行き先・コースの候補はセッション内で使い回す（作り直しで Wikipedia を叩き直さん）。部分取得（partial）は入れん。テスト（fetchImpl 差し替え）では使わん。
 const candidateCache = new Map();
 
-/** 候補集め。落ちたら「候補なし」で続ける（中断だけは投げる）。 */
-async function candidatesFor(destination, course, { fetchImpl, signal, useCache }) {
+function hasCoord(c) {
+  return typeof c.lat === 'number' && Number.isFinite(c.lat) && typeof c.lng === 'number' && Number.isFinite(c.lng);
+}
+
+/** 座標の無い地元候補を点数順に最大 4 件、Nominatim で補う（§17.2-5）。それでも無い候補は落とし、コースの範囲で切る。 */
+export async function completeCoords(cands, course, nominatim, signal) {
+  const list = cands.candidates.map((c) => ({ ...c }));
+  // 記事のある候補（座標だけ無い）を先に、次に名前だけの候補。目的地の周り ±0.5 度に絞って名前だけで引く（実測：「庄原上野公園」が引ける）
+  const lacking = list.filter((c) => !hasCoord(c) && c.local);
+  const need = [...lacking.filter((c) => c.wikiTitle), ...lacking.filter((c) => !c.wikiTitle)].slice(0, COORD_FILL_MAX);
+  for (const c of need) {
+    const got = await nominatim(c.name, { signal, viewbox: cands.center || null });
+    if (got) {
+      c.lat = got.lat; c.lng = got.lng; c.coordSource = 'osm';
+      c.distKm = cands.center ? distanceKm(cands.center, got) : null;
+    }
+  }
+  const r = COURSE_RADIUS_KM[course] ?? COURSE_RADIUS_KM.half;
+  return { ...cands, candidates: list.filter((c) => hasCoord(c) && (typeof c.distKm !== 'number' || c.distKm <= r)) };
+}
+
+/** 候補集め＋座標の補完。落ちたら投げる（§17.2-7：候補なしの自由生成はせん）。 */
+async function candidatesFor(destination, course, { fetchImpl, signal, useCache, nominatim }) {
   const key = `${destination}|${course}`;
   if (useCache && candidateCache.has(key)) return candidateCache.get(key);
-  let r;
-  try {
-    r = await collectCandidates(destination, { course, fetchImpl, signal });
-  } catch (e) {
-    if (e && e.name === 'AbortError') throw e;
-    r = { ok: false, area: null, center: null, dest: null, candidates: [] };
-  }
-  if (useCache && r.ok) candidateCache.set(key, r);
+  const raw = await collectCandidates(destination, { course, fetchImpl, signal });
+  if (!raw.ok) return raw;
+  const r = await completeCoords(raw, course, nominatim, signal);
+  if (useCache && !r.partial) candidateCache.set(key, r);
   return r;
 }
 
-/** 端末に残っとる同じ行き先の旅の場所（外した分は除く）＝2回目モードの「すでに行った場所」。 */
+/** 端末に残っとる同じ行き先の旅の場所（外した分は除く）＝2回目モードの「前に提案した場所」。 */
 export function visitedNames(store, destination) {
   const key = normalizeTitle(destination);
   const names = [];
@@ -35,11 +56,18 @@ export function visitedNames(store, destination) {
   return names;
 }
 
+/** モードの除外（§17.3）：2回目は★と前に提案した場所を外す。 */
+export function selectable(candidates, mode, visited) {
+  if (mode !== 'second') return candidates.slice();
+  const seen = (visited || []).filter(Boolean);
+  return candidates.filter((c) => !c.star && !seen.some((v) => matchSpotToCandidates(v, [c])));
+}
+
 export class FlowError extends Error {
   constructor(kind, cause) {
     super(kind);
     this.name = 'FlowError';
-    this.kind = kind; // offline | nokey | key | quota | parse | timeout | empty | other
+    this.kind = kind; // offline | nokey | key | quota | parse | timeout | empty | wiki | nomore | other
     this.cause = cause;
   }
 }
@@ -52,6 +80,8 @@ const MESSAGES = {
   parse: { text: 'うまく作れませんでした。もう一度お試しください。', action: 'retry' },
   timeout: { text: '時間がかかりすぎました。もう一度お試しください。', action: 'retry' },
   empty: { text: '見つかりませんでした。行き先の名前を変えて試してください（例：大阪城 → 大阪城公園）。', action: 'back' },
+  wiki: { text: '場所の情報が取れませんでした。少し待ってからもう一度お試しください。', action: 'retry' },
+  nomore: { text: 'この範囲で、まだ行っていない場所が見つかりませんでした。定番に戻すか、行き先を変えてみてください。', action: 'back' },
   other: { text: 'うまく作れませんでした。もう一度お試しください。', action: 'retry' },
 };
 
@@ -62,58 +92,68 @@ export function errorMessage(kind) {
 function toFlowError(e) {
   if (e instanceof FlowError) return e;
   if (e && e.name === 'AbortError') return new FlowError('timeout', e);
+  if (e instanceof CandidateError) return new FlowError('wiki', e);
   if (e instanceof GeminiError) return new FlowError(e.kind === 'other' ? 'other' : e.kind, e);
   if (e instanceof TypeError) return new FlowError('offline', e); // fetch の失敗
   return new FlowError('other', e);
-}
-
-function todayIso(now) {
-  const d = new Date(now());
-  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
 }
 
 /**
  * 1 回の生成。成功なら Trip（保存済み）。失敗は FlowError。
  * deps: { fetchImpl, now, sleep }（テストで差し替え）
  */
-export async function generateTrip({ destination, course, startTime, mode = 'classic', settings, store, deps = {}, signal } = {}) {
+export async function generateTrip({ destination, course, startTime, mode = 'classic', travelDate = null, settings, store, deps = {}, signal } = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   const now = deps.now || Date.now;
   const sleep = deps.sleep;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new FlowError('offline');
   if (!settings || !settings.apiKey) throw new FlowError('nokey');
+  const courseCount = (COURSES[course] && COURSES[course].count) || 0;
+  if (!courseCount) throw new FlowError('other');
+  // テストで差し替えた時だけ専用の待ち行列。本番はアプリ全体で 1 本（規約：1 秒 1 回）
+  const nominatim = deps.fetchImpl ? createNominatim({ fetchImpl, ...(deps.now ? { now } : {}), ...(sleep ? { sleep } : {}) }) : defaultNominatim;
 
-  // 候補（§16.2）：Wikipedia から。取れんかったら従来どおり Gemini に任せる
+  // 候補（§16.2・§17.2）：Wikipedia から。取れんかったら止める
   let cands;
   try {
-    cands = await candidatesFor(destination, course, { fetchImpl, signal, useCache: !deps.fetchImpl });
+    cands = await candidatesFor(destination, course, { fetchImpl, signal, useCache: !deps.fetchImpl, nominatim });
   } catch (e) {
     throw toFlowError(e);
   }
-  const useCands = cands.ok && cands.candidates.length > 0;
-  const courseCount = (COURSES[course] && COURSES[course].count) || 0;
-  const wanted = useCands ? Math.min(courseCount, cands.candidates.length) : courseCount;
-  const note = useCands && cands.candidates.length < courseCount ? `この範囲で見つかった場所は${cands.candidates.length}か所でした。` : null;
+  if (!cands.ok) throw new FlowError('empty');
+
+  // 季節（§17.5）→ 並べ直し（季節の加点・id の振り直し）→ モードの除外（§17.3）
+  const date = travelDate || todayJst(now);
+  const ranked = scoreCandidates(applySeason(cands.candidates, date));
   const visited = mode === 'second' ? visitedNames(store, destination) : [];
+  const pool = selectable(ranked, mode, visited);
+  if (pool.length === 0) throw new FlowError(mode === 'second' ? 'nomore' : 'empty');
+  const wanted = Math.min(courseCount, pool.length);
+  const notes = [];
+  if (pool.length < courseCount) notes.push(`この範囲で見つかった場所は${pool.length}か所でした。`);
+  const destName = String(destination ?? '').trim() || (cands.dest && cands.dest.title) || '';
 
   const apiKey = settings.apiKey;
   let useSearch = settings.useSearch !== false;
+  let useSchema = settings.useSchema !== false;
   const preferred = settings.model || MODEL_PREFERENCE[0];
   // 切替先は「キー確認で使えると分かったモデル」の中から（分からん時は好みの順）
   const known = Array.isArray(settings.models) && settings.models.length ? settings.models.map((m) => String(m).replace(/^models\//, '')) : null;
-  const pool = known ? MODEL_PREFERENCE.filter((m) => known.includes(m)) : MODEL_PREFERENCE;
-  const order = [preferred, ...pool.filter((m) => m !== preferred)];
+  const poolModels = known ? MODEL_PREFERENCE.filter((m) => known.includes(m)) : MODEL_PREFERENCE;
+  const order = [preferred, ...poolModels.filter((m) => m !== preferred)];
   let modelIndex = 0;
   let model = order[modelIndex];
   const system = SYSTEM_INSTRUCTION;
-  const user = buildUserPrompt({ destination, course, startTime, today: todayIso(now), mode, candidates: useCands ? cands.candidates : [], visited });
+  const user = buildPickPrompt({ destination: destName, course, mode, travelDate: date, candidates: pool, count: wanted });
+  const schema = pickSchema(pool.map((c) => c.id), wanted);
 
   // 1 回の呼び出し＋立て直し：
   //  ・検索根拠づけ付きで 429 → 同じモデルで根拠づけを外して再試行（通れば以後は外したまま覚える。実測：無料枠では tools が 429）
+  //  ・スキーマ付きで 400 → スキーマを外して再試行（通れば以後は外したまま覚える・§17.4）
   //  ・それでも 429、または 404（一覧にあっても使えんモデル）→ 次の使えるモデルへ 1 回だけ
   async function call(userText) {
     store.bumpUsage(new Date());
-    return generate({ apiKey, model, system, user: userText, useSearch, fetchImpl, signal });
+    return generate({ apiKey, model, system, user: userText, useSearch, schema: useSchema ? schema : null, fetchImpl, signal });
   }
   async function ask(userText) {
     try {
@@ -125,6 +165,17 @@ export async function generateTrip({ destination, course, startTime, mode = 'cla
         try {
           const r = await call(userText);
           store.saveSettings({ useSearch: false });
+          return r;
+        } catch (e2) {
+          if (!(e2 instanceof GeminiError)) throw e2;
+          e = e2;
+        }
+      }
+      if (e.status === 400 && useSchema) {
+        useSchema = false;
+        try {
+          const r = await call(userText);
+          store.saveSettings({ useSchema: false });
           return r;
         } catch (e2) {
           if (!(e2 instanceof GeminiError)) throw e2;
@@ -149,48 +200,32 @@ export async function generateTrip({ destination, course, startTime, mode = 'cla
     }
   }
 
-  // 候補と照合（§16.3）：一覧に無い名前は捨て、名前を候補の表記に揃える
-  function alignToCandidates(normalized) {
-    if (!useCands) return normalized;
-    const used = new Set();
-    const spots = [];
-    for (const s of normalized.spots) {
-      const c = matchSpotToCandidates(s.name, cands.candidates);
-      if (!c || used.has(c.name)) continue;
-      used.add(c.name);
-      spots.push({ ...s, name: c.name, wikiTitle: c.wikiTitle });
-    }
-    return { ...normalized, spots };
-  }
-
-  let normalized;
   try {
     let res = await ask(user);
-    let obj = extractJson(res.text);
-    if (!obj) {
+    let picks = normalizePicks(extractJson(res.text), pool);
+    if (!picks) {
       res = await ask(`${user}\n\nJSON だけを返してください。`);
-      obj = extractJson(res.text);
-      if (!obj) throw new FlowError('parse');
+      picks = normalizePicks(extractJson(res.text), pool);
+      if (!picks) throw new FlowError('parse');
     }
-    normalized = normalizeTripJson(obj);
-    if (normalized) normalized = alignToCandidates(normalized);
-    if (useCands && (!normalized || normalized.spots.length === 0)) {
-      // 一覧と一つも合わん → 1 回だけ言い直す
-      res = await ask(`${user}\n\n候補の一覧にある名前だけを、一字一句そのまま使ってください。`);
-      obj = extractJson(res.text);
-      normalized = obj ? alignToCandidates(normalizeTripJson(obj) || { spots: [] }) : null;
+    // 主役（目的地そのもの）は Gemini が選ばんでも 1 か所目（§17.2-2）
+    const hero = pool.find((c) => c.hero);
+    if (hero && !picks.some((p) => p.candidate.id === hero.id)) {
+      picks.unshift({ candidate: hero, kind: '観光', reason: firstSentence(hero.extract, 80) || null, stay_minutes: DEFAULT_STAY['観光'], cost_yen: null, cost_note: null, priority: -1 });
     }
-    if (!normalized || normalized.spots.length === 0) throw new FlowError('empty');
-    // コースの場所数を超えた分は切る（確認通信もその分だけ）
-    const cap = wanted || normalized.spots.length;
-    if (normalized.spots.length > cap) normalized.spots = normalized.spots.slice(0, cap);
+    if (picks.length === 0) throw new FlowError('empty');
+    picks = picks.slice(0, wanted);
 
-    const area = normalized.area || (useCands && cands.area) || '';
-    // テストで差し替えた時だけ専用の待ち行列。本番はアプリ全体で 1 本（規約：1 秒 1 回）
-    const nominatim = deps.fetchImpl ? createNominatim({ fetchImpl, ...(deps.now ? { now } : {}), ...(sleep ? { sleep } : {}) }) : defaultNominatim;
-    const verifyResults = await verifyAll(normalized.spots, area, { fetchImpl, nominatim, signal });
+    // 順番と時間（§17.6）
+    const spots = picks.map(spotFromPick);
+    const fit = fitToBudget(spots, cands.center, course, startTime);
     if (signal && signal.aborted) throw new FlowError('timeout');
-    const trip = buildTrip({ destination, course, startTime, model, normalized: { ...normalized, area }, refs: res.refs, verifyResults, searchHtml: res.searchHtml, now: new Date(), mode, wanted, note });
+    if (fit.dropped.length) notes.push(`時間に収まるよう${fit.spots.length}か所にしました。`);
+    else if (fit.shortened) notes.push('時間に収まるよう、見学の時間を短めにしています。');
+    const trip = buildTrip({
+      destination: destName, area: cands.area || '', course, startTime, model, now: new Date(), mode, travelDate: date,
+      spots: fit.spots, wanted, note: notes.join(' ') || null, dropped: fit.dropped.map((s) => s.name), refs: res.refs, searchHtml: res.searchHtml,
+    });
     store.addTrip(trip);
     return trip;
   } catch (e) {

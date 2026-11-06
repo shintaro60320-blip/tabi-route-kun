@@ -100,13 +100,13 @@ export async function wikiLookup(name, { fetchImpl = fetch, signal } = {}) {
 /**
  * Nominatim（直列・前回から 1,100ms 空ける）。query → {lat,lng}|null
  * 規約の「1秒1回」はアプリ全体の約束なので、本番は defaultNominatim（1 本）を共有する。
- * 呼び出しは (query, { signal }) 。中断された予約は通信せずに null。
+ * 呼び出しは (query, { signal, viewbox }) 。viewbox＝{lat,lng} を渡すと、その周り ±0.5 度（約 50km）に絞る（bounded=1・§17.2-5）。中断された予約は通信せずに null。
  */
 export function createNominatim({ fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   const GAP = 1100;
   let last = -Infinity;
   let chain = Promise.resolve();
-  return (query, { signal } = {}) => {
+  return (query, { signal, viewbox = null } = {}) => {
     const job = async () => {
       if (signal && signal.aborted) return null;
       const wait = last + GAP - now();
@@ -115,6 +115,10 @@ export function createNominatim({ fetchImpl = fetch, now = () => Date.now(), sle
       last = now();
       try {
         const q = new URLSearchParams({ q: query, format: 'jsonv2', limit: '1', countrycodes: 'jp' });
+        if (viewbox && Number.isFinite(viewbox.lat) && Number.isFinite(viewbox.lng)) {
+          q.set('viewbox', `${viewbox.lng - 0.5},${viewbox.lat + 0.5},${viewbox.lng + 0.5},${viewbox.lat - 0.5}`);
+          q.set('bounded', '1');
+        }
         const res = await fetchImpl(`${NOMINATIM}?${q}`, { headers: { Accept: 'application/json' }, signal });
         if (!res.ok) return null;
         const arr = await res.json();

@@ -67,7 +67,7 @@ export function computeSchedule(spots, startTime, opts = {}) {
       lastEnd = clock;
     }
     prevLive = s;
-    pendingGap = m ? { minutes: num(m.minutes), mode: m.mode ?? null, note: m.note ?? null, estimated: false } : { minutes: 0, mode: null, note: null, estimated: false };
+    pendingGap = m ? { minutes: num(m.minutes), mode: m.mode ?? null, note: m.note ?? null, estimated: Boolean(m.estimated) } : { minutes: 0, mode: null, note: null, estimated: false };
   }
   if (prevLive) prevLive.gap = null;
   const dinner = prevLive && (opts.dinner || lastEnd >= DINNER_FROM) ? { afterN: prevLive.n } : null;

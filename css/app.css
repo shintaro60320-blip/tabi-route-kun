@@ -117,6 +117,7 @@ img { display: block; }
 .times__label { font-size: .95rem; font-weight: 700; color: var(--sub); margin-right: 4px; }
 .times button { min-height: 44px; padding: 0 14px; border-radius: 12px; border: 2px solid var(--line); background: var(--white); font-weight: 700; font-size: 1rem; cursor: pointer; font-variant-numeric: tabular-nums; }
 .times button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
+.times input.date { min-height: 44px; padding: 0 12px; border-radius: 12px; border: 2px solid var(--line); background: var(--white); font: inherit; font-weight: 700; font-size: 1rem; color: var(--ink); font-variant-numeric: tabular-nums; }
 
 /* ルート */
 .hero { position: relative; height: 236px; flex: none; background: #2B3542; color: var(--white); }

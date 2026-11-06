@@ -89,13 +89,56 @@ export function normalizeTripJson(obj) {
   return { destination: strOrNull(obj.destination), area: strOrNull(obj.area), spots };
 }
 
-/** generateContent の本文（設計書 §5.3）。 */
-export function buildRequestBody({ system, user, model, useSearch = true }) {
+// ---- v1.2（設計書 §17.4）：Gemini は候補の id を選ぶだけ
+export const KIND_LIST = ['観光', '自然', '買い物', '体験', '温泉'];
+export const DEFAULT_STAY = { 観光: 60, 自然: 60, 買い物: 45, 体験: 90, 温泉: 90 };
+const STAY_MIN = 15;
+const STAY_MAX = 240;
+
+/**
+ * {picks:[{id,kind,reason,stay_minutes,cost_yen,cost_note}]} → [{candidate, kind, reason, stay_minutes, cost_yen, cost_note, priority}]。
+ * 候補に無い id と重複は捨てる。知らん種別は「観光」。滞在が無ければ種別の既定、15〜240 分に収める。
+ * picks が配列でなければ null。空なら []。
+ */
+export function normalizePicks(obj, candidates) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj) || !Array.isArray(obj.picks)) return null;
+  const byId = new Map((candidates || []).map((c) => [String(c.id), c]));
+  const used = new Set();
+  const out = [];
+  for (const p of obj.picks) {
+    if (!p || typeof p !== 'object') continue;
+    let id = p.id === null || p.id === undefined ? '' : String(p.id).trim();
+    if (/^\d+$/.test(id)) id = `c${id}`;
+    const cand = byId.get(id);
+    if (!cand || used.has(id)) continue;
+    used.add(id);
+    const kind = KIND_LIST.includes(p.kind) ? p.kind : '観光';
+    const stayRaw = numOrNull(p.stay_minutes);
+    const stay = Math.min(STAY_MAX, Math.max(STAY_MIN, Math.round(stayRaw === null || stayRaw <= 0 ? DEFAULT_STAY[kind] : stayRaw)));
+    out.push({
+      candidate: cand,
+      kind,
+      reason: strOrNull(p.reason),
+      stay_minutes: stay,
+      cost_yen: numOrNull(p.cost_yen),
+      cost_note: strOrNull(p.cost_note),
+      priority: out.length,
+    });
+  }
+  return out;
+}
+
+/** generateContent の本文（設計書 §5.3・§17.4）。schema があれば JSON 出力＋responseSchema。 */
+export function buildRequestBody({ system, user, model, useSearch = true, schema = null }) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: user }] }],
     generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
   };
+  if (schema) {
+    body.generationConfig.responseMimeType = 'application/json';
+    body.generationConfig.responseSchema = schema;
+  }
   if (useSearch) body.tools = [{ googleSearch: {} }];
   if (/^gemini-2\.5/.test(model)) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return body;
@@ -113,12 +156,12 @@ export async function listModels({ apiKey, fetchImpl = fetch, signal } = {}) {
 }
 
 /** 1 回の生成。返事の text（parts を結合）と refs（検索根拠づけの出典）。 */
-export async function generate({ apiKey, model, system, user, useSearch = true, fetchImpl = fetch, signal } = {}) {
+export async function generate({ apiKey, model, system, user, useSearch = true, schema = null, fetchImpl = fetch, signal } = {}) {
   const url = `${BASE}/models/${encodeURIComponent(model)}:generateContent`;
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: headers(apiKey),
-    body: JSON.stringify(buildRequestBody({ system, user, model, useSearch })),
+    body: JSON.stringify(buildRequestBody({ system, user, model, useSearch, schema })),
     signal,
   });
   if (!res.ok) {
@@ -126,7 +169,9 @@ export async function generate({ apiKey, model, system, user, useSearch = true, 
     let head = '';
     try { head = (await res.text()).slice(0, 300); } catch { /* 本文なし */ }
     console.error('generateContent failed', res.status, model, head);
-    throw new GeminiError(`generateContent failed: ${res.status}`, res.status);
+    const err = new GeminiError(`generateContent failed: ${res.status}`, res.status);
+    err.detail = head;
+    throw err;
   }
   const data = await res.json();
   const cand = data.candidates && data.candidates[0];

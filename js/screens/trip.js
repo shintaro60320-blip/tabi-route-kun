@@ -7,7 +7,7 @@ import { removeSpot } from '../trip.js';
 import { startJob } from './course.js';
 
 const MOVE_ICON = { walk: 'walk', transit: 'train', taxi: 'taxi' };
-const MOVE_WORD = { walk: '歩いて', transit: '電車で', taxi: 'タクシーで' };
+const MOVE_WORD = { walk: '歩いて', transit: '電車・バスで', taxi: 'タクシーで' };
 
 export function render(root, { state, nav, store, route }) {
   const trip = store.getTrip(route.id);
@@ -54,7 +54,8 @@ export function render(root, { state, nav, store, route }) {
     // 次の場所までの移動＝schedule が組んだ gap（間に外した場所があれば目安・路線名なし）
     const g = s.gap;
     if (i < live.length - 1 && g && g.minutes) {
-      const word = g.estimated ? '移動 約' : `${MOVE_WORD[g.mode] || '移動'} `;
+      // 移動はアプリの目安（設計書 §17.6）：「歩いて 約15分（目安）」「電車・バスで 約25分（目安）」
+      const word = g.estimated ? `${MOVE_WORD[g.mode] || '移動'} 約` : `${MOVE_WORD[g.mode] || '移動'} `;
       tl.append(el('div', { class: 'move' }, [icon(MOVE_ICON[g.mode] || 'walk', 16), `${word}${g.minutes}分${g.estimated ? '（目安）' : g.note ? `（${g.note}）` : ''}`]));
     } else if (i < live.length - 1) {
       tl.append(el('div', { class: 'move' }, [icon('down', 16), '次へ']));
@@ -64,7 +65,7 @@ export function render(root, { state, nav, store, route }) {
   const redo = el('button', { class: 'btn btn--text', type: 'button', style: 'align-self:flex-end;margin:0 24px', on: {
     click() {
       if (!confirm('同じ行き先・コースでもう一度作ります（今日の回数を 1 回使います）。よろしいですか？')) return;
-      state.current = { destination: trip.destination, course: trip.course, startTime: trip.startTime, mode: MODES[trip.mode] ? trip.mode : 'classic' };
+      state.current = { destination: trip.destination, course: trip.course, startTime: trip.startTime, mode: MODES[trip.mode] ? trip.mode : 'classic', travelDate: trip.travelDate || '' };
       startJob({ state, nav, store });
     },
   } }, ['作り直す']);
@@ -80,7 +81,9 @@ export function render(root, { state, nav, store, route }) {
     hero,
     el('div', { style: 'max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1' }, [
       trip.note ? el('div', { class: 'note', style: 'padding:16px 24px 0', text: trip.note }) : null,
-      tl, searchSuggestions(trip), redo,
+      tl,
+      live.length > 1 ? el('div', { class: 'note', style: 'padding:0 24px', text: '移動の時間は目安です。電車・バスの時刻は Googleマップで確かめてください。' }) : null,
+      searchSuggestions(trip), redo,
     ]),
     el('div', { class: 'bottombar' }, [mapBtn, gBtn]),
   ]));

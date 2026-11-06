@@ -2,6 +2,7 @@
 import { el, icon } from '../ui.js';
 import { COURSES, MODES, START_TIMES } from '../prompt.js';
 import { generateTrip, errorMessage } from '../flow.js';
+import { todayJst } from '../season.js';
 
 const ICON = { walk: 'walk', half: 'train', full: 'sun' };
 const TIMEOUT_MS = 60000; // 候補集め（Wikipedia 数回）＋ Gemini ＋ 確認
@@ -39,6 +40,11 @@ export function render(root, { state, nav, store }) {
     modeDesc,
   ]);
 
+  // 行く日（設計書 §17.5）：既定＝今日（日本時間）。季節の見どころの判定に使う
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cur.travelDate || '')) cur.travelDate = todayJst();
+  const dateInput = el('input', { class: 'date', type: 'date', value: cur.travelDate, min: todayJst(), ariaLabel: '行く日', on: { change() { if (/^\d{4}-\d{2}-\d{2}$/.test(dateInput.value)) cur.travelDate = dateInput.value; } } });
+  const dateRow = el('div', { class: 'times' }, [el('span', { class: 'times__label', text: '行く日' }), dateInput]);
+
   const times = el('div', { class: 'times', role: 'group', ariaLabel: '出発時刻' }, [el('span', { class: 'times__label', text: '出発' })]);
   const timeBtns = START_TIMES.map((t) => el('button', { type: 'button', ariaPressed: cur.startTime === t, text: t, on: { click() { cur.startTime = t; timeBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.textContent === t))); } } }));
   times.append(...timeBtns);
@@ -54,6 +60,7 @@ export function render(root, { state, nav, store }) {
     ]),
     modes,
     el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, cards),
+    dateRow,
     times,
     el('div', { class: 'spacer' }),
     go,
@@ -87,9 +94,10 @@ function pathSvg(count) {
 export function startJob({ state, nav, store }) {
   const { destination, course, startTime } = state.current;
   const mode = MODES[state.current.mode] ? state.current.mode : 'classic';
+  const travelDate = /^\d{4}-\d{2}-\d{2}$/.test(state.current.travelDate || '') ? state.current.travelDate : todayJst();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
-  const promise = generateTrip({ destination, course, startTime, mode, settings: store.getSettings(), store, signal: ac.signal })
+  const promise = generateTrip({ destination, course, startTime, mode, travelDate, settings: store.getSettings(), store, signal: ac.signal })
     .finally(() => clearTimeout(timer));
   promise.catch(() => {}); // 読み込み画面が受ける
   state.pending = ac;

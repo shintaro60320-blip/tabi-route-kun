@@ -6,13 +6,13 @@ import * as home from './screens/home.js';
 import * as settings from './screens/settings.js';
 import * as loading from './screens/loading.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 const store = createStore();
 export const state = {
   store,
   get settings() { return store.getSettings(); },
-  current: { destination: '', course: 'half', startTime: '10:00', mode: 'classic' },
+  current: { destination: '', course: 'half', startTime: '10:00', mode: 'classic', travelDate: '' },
   trip: null,
   pending: null, // 読み込み中の AbortController
 };
