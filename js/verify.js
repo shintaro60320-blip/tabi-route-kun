@@ -106,7 +106,7 @@ export function createNominatim({ fetchImpl = fetch, now = () => Date.now(), sle
   const GAP = 1100;
   let last = -Infinity;
   let chain = Promise.resolve();
-  return (query, { signal, viewbox = null } = {}) => {
+  const run = (query, { signal, viewbox = null } = {}) => {
     const job = async () => {
       if (signal && signal.aborted) return null;
       const wait = last + GAP - now();
@@ -120,13 +120,14 @@ export function createNominatim({ fetchImpl = fetch, now = () => Date.now(), sle
           q.set('bounded', '1');
         }
         const res = await fetchImpl(`${NOMINATIM}?${q}`, { headers: { Accept: 'application/json' }, signal });
-        if (!res.ok) return null;
+        if (!res.ok) { run.failures += 1; return null; }
         const arr = await res.json();
         const hit = Array.isArray(arr) && arr[0];
         if (!hit) return null;
         const lat = Number(hit.lat); const lng = Number(hit.lon);
         return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
       } catch {
+        run.failures += 1; // 落ちた・断られた（見つからんのとは別。§18.8）
         return null;
       }
     };
@@ -134,6 +135,8 @@ export function createNominatim({ fetchImpl = fetch, now = () => Date.now(), sle
     chain = p.catch(() => {});
     return p;
   };
+  run.failures = 0;
+  return run;
 }
 
 /** アプリ全体で 1 本の Nominatim 待ち行列（規約：1 秒 1 回）。 */

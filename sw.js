@@ -1,14 +1,14 @@
 // 旅ルートくんの殻をキャッシュする（設計書 §10.2）。API・地図タイル・写真はキャッシュしない。
 // 版ごとに丸ごと入れ替える：インストール時に殻を全部そろえる（1 つでも取れんかったら新しい版にせん）。
 // 稼働中の版をファイル単位で上書きせん（新旧の混在を防ぐ）。更新は CACHE_NAME を上げて置き直す。
-const CACHE_NAME = 'trk-v1.2.0';
+const CACHE_NAME = 'trk-v1.3.0';
 const SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './css/app.css',
   './js/app.js', './js/ui.js', './js/store.js', './js/prompt.js', './js/gemini.js', './js/verify.js',
-  './js/schedule.js', './js/maplinks.js', './js/trip.js', './js/flow.js', './js/speech.js', './js/candidates.js', './js/season.js', './js/route.js',
+  './js/schedule.js', './js/maplinks.js', './js/trip.js', './js/flow.js', './js/speech.js', './js/candidates.js', './js/season.js', './js/route.js', './js/candcache.js',
   './js/screens/home.js', './js/screens/course.js', './js/screens/trip.js', './js/screens/map.js',
   './js/screens/spot.js', './js/screens/settings.js', './js/screens/loading.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png',

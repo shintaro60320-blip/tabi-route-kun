@@ -5,8 +5,11 @@ export function render(root, { state, nav }) {
   const job = state.job; // { destination, promise } を course 画面が置く
   if (!job) { nav('/home'); return; }
 
-  const msg = el('h2', { class: 'h2', text: 'おすすめを考えています…' });
-  const more = el('div', { class: 'sub', hidden: true, text: 'もう少しかかっています' });
+  // 途中の表示（設計書 §18.7）：今どこまで進んだかを言う
+  const STAGE = { collect: '行き先のまわりを調べています…', pick: 'おすすめを考えています…', build: 'ルートを組んでいます…' };
+  const msg = el('h2', { class: 'h2', text: STAGE[job.stage] || STAGE.pick });
+  job.onStage = (s) => { if (STAGE[s]) msg.textContent = STAGE[s]; };
+  const more = el('div', { class: 'sub', hidden: true, text: 'もう少しかかっています（はじめての行き先は 1 分ほどかかることがあります）' });
   const box = el('section', { class: 'screen loading', dataset: { screen: 'loading' } }, [
     el('div', { class: 'spacer' }),
     msg,
@@ -21,7 +24,7 @@ export function render(root, { state, nav }) {
   // 済んだ仕事を開き直した時（Android の「戻る」で戻ってきた等）は、もう一度結果へ飛ばさずコース選びへ
   if (job.settled) { nav('/course', { replace: true }); return; }
 
-  const slow = setTimeout(() => { more.hidden = false; }, 15000);
+  const slow = setTimeout(() => { more.hidden = false; }, 25000);
   const mine = () => location.hash === '#/loading' && state.job === job; // 古い仕事の結果で画面を動かさん
   job.promise.then((trip) => {
     clearTimeout(slow);

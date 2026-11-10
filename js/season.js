@@ -1,18 +1,24 @@
 // 季節（設計書 §17.5）。記事の説明文から「その月の見どころ」を読む。名前では判断せん。純粋関数だけ。
 
+// ctx:true＝その語と同じ文に「名所・見頃・知られる・咲く…」がある時だけ数える（§18.6）。
+// 実測（2026-11-10）：和菓子店の記事の「もみじ饅頭」で「今の季節：紅葉」が付いた。
 const FEATURES = [
-  { note: '桜', re: /桜|サクラ|花見/, months: [3, 4] },
-  { note: '梅', re: /梅(?!雨)/, months: [2, 3] },
+  { note: '桜', re: /桜|サクラ|花見/, months: [3, 4], ctx: true },
+  { note: '梅', re: /梅(?!雨)/, months: [2, 3], ctx: true },
   { note: '藤', re: /藤の花|藤棚|フジの花/, months: [4, 5] },
-  { note: '紫陽花', re: /紫陽花|あじさい|アジサイ/, months: [6] },
-  { note: 'ホタル', re: /ホタル|蛍/, months: [6] },
-  { note: 'ラベンダー', re: /ラベンダー/, months: [7] },
-  { note: 'ひまわり', re: /ひまわり|ヒマワリ|向日葵/, months: [7, 8] },
-  { note: 'コスモス', re: /コスモス/, months: [9, 10] },
-  { note: '彼岸花', re: /彼岸花|ヒガンバナ/, months: [9] },
-  { note: '紅葉', re: /紅葉|もみじ|モミジ/, months: [10, 11] },
-  { note: '雪', re: /雪景色|樹氷|氷瀑|雪/, months: [12, 1, 2] },
+  { note: '紫陽花', re: /紫陽花|あじさい|アジサイ/, months: [6], ctx: true },
+  { note: 'ホタル', re: /ホタル|蛍/, months: [6], ctx: true },
+  { note: 'ラベンダー', re: /ラベンダー/, months: [7], ctx: true },
+  { note: 'ひまわり', re: /ひまわり|ヒマワリ|向日葵/, months: [7, 8], ctx: true },
+  { note: 'コスモス', re: /コスモス/, months: [9, 10], ctx: true },
+  { note: '彼岸花', re: /彼岸花|ヒガンバナ/, months: [9], ctx: true },
+  { note: '紅葉', re: /紅葉|もみじ|モミジ/, months: [10, 11], ctx: true },
+  { note: '雪', re: /雪景色|樹氷|氷瀑|雪まつり/, months: [12, 1, 2] },
 ];
+const CONTEXT = /名所|見頃|見ごろ|知られ|有名|並木|群生|自生|咲|色づ|狩り|まつり|祭|ライトアップ|百選|100選|美し|見られ|楽しめ|彩|花見/;
+// 食べ物・商品の名前に入っとる語は季節やない
+const NOT_SEASON = /饅頭|まんじゅう|餅|もち|菓子|漬|干し|酒/;
+
 
 // 季節限定の施設（名前で分かるもの）と、説明文の冬季閉鎖
 const SEASONAL_NAME = [
@@ -27,9 +33,18 @@ const WINTER = [12, 1, 2, 3];
 export function seasonFeatures(extract, month) {
   const t = String(extract ?? '');
   if (!t) return [];
+  const sentences = t.split('。');
   const out = [];
   for (const f of FEATURES) {
-    if (f.months.includes(month) && f.re.test(t) && !out.includes(f.note)) out.push(f.note);
+    if (!f.months.includes(month) || out.includes(f.note)) continue;
+    const hit = sentences.some((sn) => {
+      const m = sn.match(f.re);
+      if (!m) return false;
+      if (!f.ctx) return true;
+      const after = sn.slice(m.index, m.index + m[0].length + 6);
+      return CONTEXT.test(sn) && !NOT_SEASON.test(after);
+    });
+    if (hit) out.push(f.note);
   }
   return out;
 }

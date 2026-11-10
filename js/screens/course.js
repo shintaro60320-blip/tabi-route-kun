@@ -5,7 +5,7 @@ import { generateTrip, errorMessage } from '../flow.js';
 import { todayJst } from '../season.js';
 
 const ICON = { walk: 'walk', half: 'train', full: 'sun' };
-const TIMEOUT_MS = 60000; // 候補集め（Wikipedia 数回）＋ Gemini ＋ 確認
+const TIMEOUT_MS = 150000; // 候補集め（Wikipedia 十数回・混んどる日は 50 秒かかった＝2026-11-10 実測）＋ Gemini
 
 export function render(root, { state, nav, store }) {
   if (!state.current.destination) { nav('/home'); return; }
@@ -97,18 +97,19 @@ export function startJob({ state, nav, store }) {
   const travelDate = /^\d{4}-\d{2}-\d{2}$/.test(state.current.travelDate || '') ? state.current.travelDate : todayJst();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
-  const promise = generateTrip({ destination, course, startTime, mode, travelDate, settings: store.getSettings(), store, signal: ac.signal })
+  const job = { stage: 'collect', onStage: null };
+  const promise = generateTrip({ destination, course, startTime, mode, travelDate, settings: store.getSettings(), store, signal: ac.signal, onStage(s) { job.stage = s; if (job.onStage) job.onStage(s); } })
     .finally(() => clearTimeout(timer));
   promise.catch(() => {}); // 読み込み画面が受ける
   state.pending = ac;
-  state.job = {
+  state.job = Object.assign(job, {
     destination,
     promise,
     settled: false,
     cancel() { clearTimeout(timer); ac.abort(); },
     retry() { startJob({ state, nav, store }); },
     describeError(err) { return errorMessage(err && err.kind); },
-  };
+  });
   if (location.hash === '#/loading') window.dispatchEvent(new HashChangeEvent('hashchange'));
   else nav('/loading');
 }

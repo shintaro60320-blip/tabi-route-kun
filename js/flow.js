@@ -7,8 +7,9 @@ import { collectCandidates, scoreCandidates, distanceKm, matchSpotToCandidates, 
 import { applySeason, todayJst } from './season.js';
 import { fitToBudget } from './route.js';
 import { buildTrip, spotFromPick } from './trip.js';
+import { loadCands, saveCands } from './candcache.js';
 
-export const COORD_FILL_MAX = 4; // 座標を補う地元候補の数（§17.2-5）
+export const COORD_FILL_MAX = 6; // 座標を補う候補の数（§17.2-5・§18.8）
 
 // 同じ行き先・コースの候補はセッション内で使い回す（作り直しで Wikipedia を叩き直さん）。部分取得（partial）は入れん。テスト（fetchImpl 差し替え）では使わん。
 const candidateCache = new Map();
@@ -21,8 +22,11 @@ function hasCoord(c) {
 export async function completeCoords(cands, course, nominatim, signal) {
   const list = cands.candidates.map((c) => ({ ...c }));
   // 記事のある候補（座標だけ無い）を先に、次に名前だけの候補。目的地の周り ±0.5 度に絞って名前だけで引く（実測：「庄原上野公園」が引ける）
-  const lacking = list.filter((c) => !hasCoord(c) && c.local);
-  const need = [...lacking.filter((c) => c.wikiTitle), ...lacking.filter((c) => !c.wikiTitle)].slice(0, COORD_FILL_MAX);
+  // 主役の記事に出てくる所（linked）→ 記事のある地元候補 → 名前だけの地元候補 の順
+  const lacking = list.filter((c) => !hasCoord(c) && (c.local || c.linked));
+  const rank = (c) => (c.linked ? 0 : c.wikiTitle ? 1 : 2);
+  const need = lacking.slice().sort((a, b) => rank(a) - rank(b)).slice(0, COORD_FILL_MAX);
+  const failed0 = Number(nominatim.failures) || 0;
   for (const c of need) {
     const got = await nominatim(c.name, { signal, viewbox: cands.center || null });
     if (got) {
@@ -31,17 +35,22 @@ export async function completeCoords(cands, course, nominatim, signal) {
     }
   }
   const r = COURSE_RADIUS_KM[course] ?? COURSE_RADIUS_KM.half;
-  return { ...cands, candidates: list.filter((c) => hasCoord(c) && (typeof c.distKm !== 'number' || c.distKm <= r)) };
+  // 地図に断られた回は部分取得（減った候補を使い回し・保存に入れん）
+  const failed = (Number(nominatim.failures) || 0) > failed0;
+  return { ...cands, partial: Boolean(cands.partial) || failed, candidates: list.filter((c) => hasCoord(c) && (typeof c.distKm !== 'number' || c.distKm <= r)) };
 }
 
 /** 候補集め＋座標の補完。落ちたら投げる（§17.2-7：候補なしの自由生成はせん）。 */
-async function candidatesFor(destination, course, { fetchImpl, signal, useCache, nominatim }) {
+async function candidatesFor(destination, course, { fetchImpl, signal, useCache, nominatim, storage = null }) {
   const key = `${destination}|${course}`;
   if (useCache && candidateCache.has(key)) return candidateCache.get(key);
+  // 端末に残した候補（7 日・§18.7）：同じ行き先は Wikipedia を叩き直さず、すぐ出す
+  const saved = useCache ? loadCands(storage, key) : null;
+  if (saved) { candidateCache.set(key, saved); return saved; }
   const raw = await collectCandidates(destination, { course, fetchImpl, signal });
   if (!raw.ok) return raw;
   const r = await completeCoords(raw, course, nominatim, signal);
-  if (useCache && !r.partial) candidateCache.set(key, r);
+  if (useCache && !r.partial) { candidateCache.set(key, r); saveCands(storage, key, r); }
   return r;
 }
 
@@ -102,7 +111,9 @@ function toFlowError(e) {
  * 1 回の生成。成功なら Trip（保存済み）。失敗は FlowError。
  * deps: { fetchImpl, now, sleep }（テストで差し替え）
  */
-export async function generateTrip({ destination, course, startTime, mode = 'classic', travelDate = null, settings, store, deps = {}, signal } = {}) {
+export async function generateTrip({ destination, course, startTime, mode = 'classic', travelDate = null, settings, store, deps = {}, signal, onStage = null } = {}) {
+  // 途中の表示（§18.7）：collect＝まわりを調べる／pick＝Gemini が選ぶ／build＝ルートを組む
+  const stage = (s) => { if (typeof onStage === 'function') { try { onStage(s); } catch { /* 表示の失敗で止めん */ } } };
   const fetchImpl = deps.fetchImpl || fetch;
   const now = deps.now || Date.now;
   const sleep = deps.sleep;
@@ -116,7 +127,9 @@ export async function generateTrip({ destination, course, startTime, mode = 'cla
   // 候補（§16.2・§17.2）：Wikipedia から。取れんかったら止める
   let cands;
   try {
-    cands = await candidatesFor(destination, course, { fetchImpl, signal, useCache: !deps.fetchImpl, nominatim });
+    stage('collect');
+    const storage = !deps.fetchImpl && typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null;
+    cands = await candidatesFor(destination, course, { fetchImpl, signal, useCache: !deps.fetchImpl, nominatim, storage });
   } catch (e) {
     throw toFlowError(e);
   }
@@ -201,6 +214,7 @@ export async function generateTrip({ destination, course, startTime, mode = 'cla
   }
 
   try {
+    stage('pick');
     let res = await ask(user);
     let picks = normalizePicks(extractJson(res.text), pool);
     if (!picks) {
@@ -217,6 +231,7 @@ export async function generateTrip({ destination, course, startTime, mode = 'cla
     picks = picks.slice(0, wanted);
 
     // 順番と時間（§17.6）
+    stage('build');
     const spots = picks.map(spotFromPick);
     const fit = fitToBudget(spots, cands.center, course, startTime);
     if (signal && signal.aborted) throw new FlowError('timeout');
