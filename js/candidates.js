@@ -1,10 +1,10 @@
 // 候補の集め方（設計書 §16.2・§17.2）：Gemini の記憶ではなく Wikipedia から「その土地の場所」を集め、Gemini には選ぶだけをさせる。
 // 前半＝純粋関数（ふるい・節の読み方・並べ方）、後半＝通信（createWikiClient・collectCandidates）。
 
-import { normalizeTitle, titlesMatch, parseWikiPage, wikiLookup } from './verify.js';
+import { normalizeTitle, titlesMatch, parseWikiPage } from './verify.js';
 
 const WIKI = 'https://ja.wikipedia.org/w/api.php';
-const UA = 'TabiRouteKun/1.3 (personal use)';
+const UA = 'TabiRouteKun/1.3 (https://shintaro60320-blip.github.io/tabi-route-kun/)'; // Wikimedia の決まり：連絡先（URL）入りの名乗り
 const HEADERS = { 'Api-User-Agent': UA };
 export const MAX_CANDIDATES = 40;
 export const MIN_LENGTH_NEARBY = 2500; // 近傍だけで拾った記事は、これより短ければ無名と見なす
@@ -354,7 +354,18 @@ function abortError() {
 
 const RETRY_CODES = /too-busy|maxlag|ratelimited|readonly|internal_api_error/;
 
-export function createWikiClient({ fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), gapMs = 150, cooldownMs = 60000, retryMs = 1500 } = {}) {
+// 429（混雑）の扱い（2026-11-14 とと「全然ヒットせん」）：Retry-After（無ければ 5 秒）だけ待ってやり直す（2 回まで）。
+// それでも 429 なら、言われた秒数だけ問い合わせを止めて CandidateError を投げる（画面は「混み合っています」）。
+// 以前は 1 回目の 429 で即失敗＋60 秒止めとって、続けて試した検索が全部「見つかりませんでした」になっとった。
+export const RETRY_429 = 2;
+export function retryAfterMs(res, fallback = 5000, cap = 20000) {
+  const v = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('Retry-After') : null;
+  const n = Number(v);
+  const ms = Number.isFinite(n) && n >= 0 ? n * 1000 : fallback;
+  return Math.min(Math.max(ms, 1000), cap);
+}
+
+export function createWikiClient({ fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), gapMs = 150, cooldownMs = 20000, retryMs = 1500 } = {}) {
   let chain = Promise.resolve();
   let last = -Infinity;
   let coolUntil = -Infinity;
@@ -372,8 +383,9 @@ export function createWikiClient({ fetchImpl = fetch, now = () => Date.now(), sl
         const q = new URLSearchParams({ format: 'json', origin: '*', ...params });
         const res = await fetchImpl(`${WIKI}?${q}`, { headers: HEADERS, signal });
         if (!res.ok) {
-          if (res.status === 429) coolUntil = now() + cooldownMs;
-          throw new CandidateError(`http ${res.status}`, res.status);
+          const err = new CandidateError(`http ${res.status}`, res.status);
+          if (res.status === 429) err.waitMs = Math.min(retryAfterMs(res), cooldownMs);
+          throw err;
         }
         const json = await res.json();
         if (json && json.error) {
@@ -383,13 +395,26 @@ export function createWikiClient({ fetchImpl = fetch, now = () => Date.now(), sl
         }
         return json;
       };
-      try {
-        return await once();
-      } catch (e) {
-        if (!(e instanceof CandidateError) || !e.code || !RETRY_CODES.test(e.code)) throw e;
-        await sleep(retryMs);
-        if (signal && signal.aborted) throw abortError();
-        return once();
+      let busyRetried = false;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await once();
+        } catch (e) {
+          if (!(e instanceof CandidateError)) throw e;
+          if (e.status === 429) {
+            if (attempt < RETRY_429) {
+              await sleep(e.waitMs);
+              if (signal && signal.aborted) throw abortError();
+              continue;
+            }
+            coolUntil = now() + e.waitMs;
+            throw e;
+          }
+          if (busyRetried || !e.code || !RETRY_CODES.test(e.code)) throw e;
+          busyRetried = true;
+          await sleep(retryMs);
+          if (signal && signal.aborted) throw abortError();
+        }
       }
     };
     const p = chain.then(job, job);
@@ -417,6 +442,45 @@ async function soft(fn, fallback, state) {
   }
 }
 
+// 行き先の名前が案内ページ（曖昧さ回避）や記事なしの時の選び方（2026-11-14 とと「全然ヒットせん」）。
+// 実例：「京都」→ 検索 1 位の「京都府」（府の記事からは名所が 0）／「宮島」→「宮島競艇場」を選びかけ、本当の行き先「厳島」に届かんかった。
+// ①「〇〇市・町・村」の記事があればそれ ②無ければ検索上位から、位置があり・府県や会場やない・観光や地理の分類に入る記事を選ぶ。
+const PREF_TITLE = /[都道府県]$/;
+const PLACE_CAT = /観光|地理|島|山|温泉|名所|史跡|公園|寺|神社|城|景勝|峡|滝|湖|川|海岸|半島|町並み|宿場|庭園|遺跡/;
+export function choosePlaceTitle(name, pages) {
+  const ok = (pages || []).filter((p) => p && !p.missing && !p.disambiguation && p.hasCoord && !PREF_TITLE.test(p.title) && !isVenue(p.title));
+  for (const suf of ['市', '町', '村']) {
+    const hit = ok.find((p) => p.title === `${name}${suf}`);
+    if (hit) return hit.title;
+  }
+  const scored = ok.map((p) => ({
+    title: p.title,
+    place: (p.categories || []).some((c) => PLACE_CAT.test(String(c).replace(/^Category:/, ''))) ? 1 : 0,
+    match: titlesMatch(name, p.title) ? 1 : 0,
+    len: Number(p.length) || 0,
+  }));
+  scored.sort((a, b) => (b.place - a.place) || (b.match - a.match) || (b.len - a.len));
+  return scored.length ? scored[0].title : null;
+}
+
+async function pickPlaceTitle(name, client, signal) {
+  const hits = await client.getJson({ action: 'query', list: 'search', srsearch: name, srlimit: '8' }, signal);
+  const found = ((hits && hits.query && hits.query.search) || []).map((h) => h && h.title).filter(Boolean);
+  const titles = [...new Set([`${name}市`, `${name}町`, `${name}村`, ...found])].slice(0, 12);
+  const j = await client.getJson({
+    action: 'query', titles: titles.join('|'), redirects: '1', prop: 'coordinates|pageprops|categories|info', ppprop: 'disambiguation', cllimit: 'max',
+  }, signal);
+  const pages = Object.values((j && j.query && j.query.pages) || {}).map((pg) => ({
+    title: pg.title,
+    missing: 'missing' in pg || 'invalid' in pg,
+    disambiguation: Boolean(pg.pageprops && 'disambiguation' in pg.pageprops),
+    hasCoord: Array.isArray(pg.coordinates) && pg.coordinates.length > 0,
+    categories: (pg.categories || []).map((c) => c.title),
+    length: pg.length,
+  }));
+  return choosePlaceTitle(name, pages);
+}
+
 async function destPage(name, client, fetchImpl, signal) {
   const q = (titles) => client.getJson({
     action: 'query', titles, redirects: '1', prop: 'extracts|pageimages|coordinates|info|pageprops|categories',
@@ -430,9 +494,10 @@ async function destPage(name, client, fetchImpl, signal) {
   };
   let p = withCats(await q(name));
   if (p) return p;
-  const found = await wikiLookup(name, { fetchImpl, signal }); // 検索の道（§6.2）
-  if (!found || !found.title) return null;
-  p = withCats(await q(found.title));
+  // 検索の道（§6.2）。同じ待ち行列を通す＝混雑（429）を「該当なし」と取り違えん（以前は wikiLookup が失敗を null にしとった）
+  const title = await pickPlaceTitle(name, client, signal);
+  if (!title) return null;
+  p = withCats(await q(title));
   return p;
 }
 
@@ -645,6 +710,8 @@ export async function collectCandidates(destination, { course = 'half', fetchImp
     .filter((c) => c.hero || !(heroFirst.includes(c.name) && /(?:島|半島|山地|盆地|平野)。?$/.test(firstSentence(c.extract, 300))))
     .map((c) => (c.hero ? c : { ...c, climb: detectClimb(c), street: isStreetByExtract(c.extract), minor: isMinorSight(c) }));
   const candidates = scoreCandidates(kept);
+  // 候補が 0 で、途中の問い合わせが落ちとった＝「無い」のやなく「取れんかった」。見つからん扱いにせず失敗として返す
+  if (!candidates.length && state.partial) throw new CandidateError('sources failed', 0);
 
   return {
     ok: true,

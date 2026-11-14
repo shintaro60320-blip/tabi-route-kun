@@ -2,7 +2,7 @@
 
 const WIKI = 'https://ja.wikipedia.org/w/api.php';
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
-const UA = 'TabiRouteKun/1.0 (personal use)'; // ヘッダは ISO-8859-1 のみ（日本語を入れると fetch が例外）
+const UA = 'TabiRouteKun/1.3 (https://shintaro60320-blip.github.io/tabi-route-kun/)'; // ヘッダは ISO-8859-1 のみ（日本語を入れると fetch が例外）
 const WIKI_HEADERS = { 'Api-User-Agent': UA };
 
 /** 比べるための正規化：NFKC・空白と「・」を除く・丸括弧の中を除く・小文字。 */

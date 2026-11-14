@@ -6,7 +6,7 @@ import * as home from './screens/home.js';
 import * as settings from './screens/settings.js';
 import * as loading from './screens/loading.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.3.2';
 
 const store = createStore();
 export const state = {

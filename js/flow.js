@@ -89,7 +89,7 @@ const MESSAGES = {
   parse: { text: 'うまく作れませんでした。もう一度お試しください。', action: 'retry' },
   timeout: { text: '時間がかかりすぎました。もう一度お試しください。', action: 'retry' },
   empty: { text: '見つかりませんでした。行き先の名前を変えて試してください（例：大阪城 → 大阪城公園）。', action: 'back' },
-  wiki: { text: '場所の情報が取れませんでした。少し待ってからもう一度お試しください。', action: 'retry' },
+  wiki: { text: '場所の情報を調べるサービス（Wikipedia）が混み合っていて、情報が取れませんでした。1分ほど待ってから、もう一度お試しください。', action: 'retry' },
   nomore: { text: 'この範囲で、まだ行っていない場所が見つかりませんでした。定番に戻すか、行き先を変えてみてください。', action: 'back' },
   other: { text: 'うまく作れませんでした。もう一度お試しください。', action: 'retry' },
 };
