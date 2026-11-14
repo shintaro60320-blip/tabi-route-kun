@@ -1,7 +1,7 @@
 // 旅ルートくんの殻をキャッシュする（設計書 §10.2）。API・地図タイル・写真はキャッシュしない。
 // 版ごとに丸ごと入れ替える：インストール時に殻を全部そろえる（1 つでも取れんかったら新しい版にせん）。
 // 稼働中の版をファイル単位で上書きせん（新旧の混在を防ぐ）。更新は CACHE_NAME を上げて置き直す。
-const CACHE_NAME = 'trk-v1.3.0';
+const CACHE_NAME = 'trk-v1.3.1';
 const SHELL = [
   './',
   './index.html',
@@ -31,7 +31,8 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)));
+    // 消すのは自分の古い版（trk- で始まる）だけ。同じ住所（github.io）に並ぶ別アプリのキャッシュには触らん
+    await Promise.all(keys.filter((k) => k.startsWith('trk-') && k !== CACHE_NAME).map((k) => caches.delete(k)));
     await self.clients.claim();
   })());
 });
